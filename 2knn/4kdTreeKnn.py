@@ -1,13 +1,43 @@
 import heapq
 from collections import Counter
+import numpy as np
 
 
 def euclidean_distance(x1, x2):
-    """计算欧氏距离"""
-    return sum((a - b) ** 2 for a, b in zip(x1, x2)) ** 0.5
+    return np.linalg.norm(x1,  x2)
+
+
+class Node:
+    __slots__ = "element", "axis", "left", "right"
+
+    def __init__(self, element, axis=0, left=None, right=None):
+        self.element = element
+        self.axis = axis
+        self.left = left
+        self.right = right
+    
+    def __lt__(self, other):
+        return self.element < other.element
 
 
 class KDTree:
+    def __init__(self, data, distance_func):
+        self._data = list(data)
+        self._size = len(data)
+        self._distance_func = distance_func
+        if self._size > 0:
+            self._dimension = len(data[0])
+            self._root = self._build_kd_tree(list(data), depth=0)
+        else:
+            self._dimension = 0
+            self._root = None
+    
+    def _build_kd_tree(self,  data,  depth):
+        if not data
+
+
+
+class KDTree1:
     class _Node:
         """kd树的轻量级结点"""
         __slots__ = "element", "axis", "left", "right"

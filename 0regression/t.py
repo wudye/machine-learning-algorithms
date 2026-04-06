@@ -1,147 +1,328 @@
 """
-Linear regression is the most basic type of regression commonly used for
-predictive analysis. The idea is pretty simple: we have a dataset and we have
-features associated with it. Features should be chosen very cautiously
-as they determine how much our model will be able to make future predictions.
-We try to set the weight of these features, over many iterations, so that they best
-fit our dataset. In this particular code, I had used a CSGO dataset (ADR vs
-Rating). We try to best fit a line through dataset and estimate the parameters.
+Demonstration of the Automatic Differentiation (Reverse mode).
+
+Reference: https://en.wikipedia.org/wiki/Automatic_differentiation
+
+Author: Poojan Smart
+Email: smrtpoojan@gmail.com
 """
 
-# /// script
-# requires-python = ">=3.13"
-# dependencies = [
-#     "httpx",
-#     "numpy",
-# ]
-# ///
+from __future__ import annotations
 
-import httpx
+from collections import defaultdict
+from enum import Enum
+from types import TracebackType
+from typing import Any
+
 import numpy as np
+from typing_extensions import Self  # noqa: UP035
 
 
-def collect_dataset():
-    """Collect dataset of CSGO
-    The dataset contains ADR vs Rating of a Player
-    :return : dataset obtained from the link, as matrix
+class OpType(Enum):
     """
-    response = httpx.get(
-        "https://raw.githubusercontent.com/yashLadha/The_Math_of_Intelligence/"
-        "master/Week1/ADRvsRating.csv",
-        timeout=10,
-    )
-    lines = response.text.splitlines()
-    data = []
-    for item in lines:
-        item = item.split(",")
-        data.append(item)
-    data.pop(0)  # This is for removing the labels from the list
-    dataset = np.matrix(data)
-    return dataset
-
-
-def run_steep_gradient_descent(data_x, data_y, len_data, alpha, theta):
-    """Run steep gradient descent and updates the Feature vector accordingly_
-    :param data_x   : contains the dataset
-    :param data_y   : contains the output associated with each data-entry
-    :param len_data : length of the data_
-    :param alpha    : Learning rate of the model
-    :param theta    : Feature vector (weight's for our model)
-    ;param return    : Updated Feature's, using
-                       curr_features - alpha_ * gradient(w.r.t. feature)
-    >>> import numpy as np
-    >>> data_x = np.array([[1, 2], [3, 4]])
-    >>> data_y = np.array([5, 6])
-    >>> len_data = len(data_x)
-    >>> alpha = 0.01
-    >>> theta = np.array([0.1, 0.2])
-    >>> run_steep_gradient_descent(data_x, data_y, len_data, alpha, theta)
-    array([0.196, 0.343])
+    Class represents list of supported operations on Variable for gradient calculation.
     """
-    n = len_data
 
-    prod = np.dot(theta, data_x.transpose())
-    prod -= data_y.transpose()
-    sum_grad = np.dot(prod, data_x)
-    theta = theta - (alpha / n) * sum_grad
-    return theta
+    ADD = 0
+    SUB = 1
+    MUL = 2
+    DIV = 3
+    MATMUL = 4
+    POWER = 5
+    NOOP = 6
 
 
-def sum_of_square_error(data_x, data_y, len_data, theta):
-    """Return sum of square error for error calculation
-    :param data_x    : contains our dataset
-    :param data_y    : contains the output (result vector)
-    :param len_data  : len of the dataset
-    :param theta     : contains the feature vector
-    :return          : sum of square error computed from given feature's
-
-    Example:
-    >>> vc_x = np.array([[1.1], [2.1], [3.1]])
-    >>> vc_y = np.array([1.2, 2.2, 3.2])
-    >>> round(sum_of_square_error(vc_x, vc_y, 3, np.array([1])),3)
-    np.float64(0.005)
+class Variable:
     """
-    prod = np.dot(theta, data_x.transpose())
-    prod -= data_y.transpose()
-    sum_elem = np.sum(np.square(prod))
-    error = sum_elem / (2 * len_data)
-    return error
+    Class represents n-dimensional object which is used to wrap numpy array on which
+    operations will be performed and the gradient will be calculated.
 
-
-def run_linear_regression(data_x, data_y):
-    """Implement Linear regression over the dataset
-    :param data_x  : contains our dataset
-    :param data_y  : contains the output (result vector)
-    :return        : feature for line of best fit (Feature vector)
+    Examples:
+    >>> Variable(5.0)
+    Variable(5.0)
+    >>> Variable([5.0, 2.9])
+    Variable([5.  2.9])
+    >>> Variable([5.0, 2.9]) + Variable([1.0, 5.5])
+    Variable([6.  8.4])
+    >>> Variable([[8.0, 10.0]])
+    Variable([[ 8. 10.]])
     """
-    iterations = 100000
-    alpha = 0.0001550
 
-    no_features = data_x.shape[1]
-    len_data = data_x.shape[0] - 1
+    def __init__(self, value: Any) -> None:
+        self.value = np.array(value)
 
-    theta = np.zeros((1, no_features))
+        # pointers to the operations to which the Variable is input
+        self.param_to: list[Operation] = []
+        # pointer to the operation of which the Variable is output of
+        self.result_of: Operation = Operation(OpType.NOOP)
 
-    for i in range(iterations):
-        theta = run_steep_gradient_descent(data_x, data_y, len_data, alpha, theta)
-        error = sum_of_square_error(data_x, data_y, len_data, theta)
-        print(f"At Iteration {i + 1} - Error is {error:.5f}")
+    def __repr__(self) -> str:
+        return f"Variable({self.value})"
 
-    return theta
+    def to_ndarray(self) -> np.ndarray:
+        return self.value
+
+    def __add__(self, other: Variable) -> Variable:
+        result = Variable(self.value + other.value)
+
+        with GradientTracker() as tracker:
+            # if tracker is enabled, computation graph will be updated
+            if tracker.enabled:
+                tracker.append(OpType.ADD, params=[self, other], output=result)
+        return result
+
+    def __sub__(self, other: Variable) -> Variable:
+        result = Variable(self.value - other.value)
+
+        with GradientTracker() as tracker:
+            # if tracker is enabled, computation graph will be updated
+            if tracker.enabled:
+                tracker.append(OpType.SUB, params=[self, other], output=result)
+        return result
+
+    def __mul__(self, other: Variable) -> Variable:
+        result = Variable(self.value * other.value)
+
+        with GradientTracker() as tracker:
+            # if tracker is enabled, computation graph will be updated
+            if tracker.enabled:
+                tracker.append(OpType.MUL, params=[self, other], output=result)
+        return result
+
+    def __truediv__(self, other: Variable) -> Variable:
+        result = Variable(self.value / other.value)
+
+        with GradientTracker() as tracker:
+            # if tracker is enabled, computation graph will be updated
+            if tracker.enabled:
+                tracker.append(OpType.DIV, params=[self, other], output=result)
+        return result
+
+    def __matmul__(self, other: Variable) -> Variable:
+        result = Variable(self.value @ other.value)
+
+        with GradientTracker() as tracker:
+            # if tracker is enabled, computation graph will be updated
+            if tracker.enabled:
+                tracker.append(OpType.MATMUL, params=[self, other], output=result)
+        return result
+
+    def __pow__(self, power: int) -> Variable:
+        result = Variable(self.value**power)
+
+        with GradientTracker() as tracker:
+            # if tracker is enabled, computation graph will be updated
+            if tracker.enabled:
+                tracker.append(
+                    OpType.POWER,
+                    params=[self],
+                    output=result,
+                    other_params={"power": power},
+                )
+        return result
+
+    def add_param_to(self, param_to: Operation) -> None:
+        self.param_to.append(param_to)
+
+    def add_result_of(self, result_of: Operation) -> None:
+        self.result_of = result_of
 
 
-def mean_absolute_error(predicted_y, original_y):
-    """Return sum of square error for error calculation
-    :param predicted_y   : contains the output of prediction (result vector)
-    :param original_y    : contains values of expected outcome
-    :return          : mean absolute error computed from given feature's
-
-    >>> predicted_y = [3, -0.5, 2, 7]
-    >>> original_y = [2.5, 0.0, 2, 8]
-    >>> mean_absolute_error(predicted_y, original_y)
-    0.5
+class Operation:
     """
-    total = sum(abs(y - predicted_y[i]) for i, y in enumerate(original_y))
-    return total / len(original_y)
+    Class represents operation between single or two Variable objects.
+    Operation objects contains type of operation, pointers to input Variable
+    objects and pointer to resulting Variable from the operation.
+    """
+
+    def __init__(
+        self,
+        op_type: OpType,
+        other_params: dict | None = None,
+    ) -> None:
+        self.op_type = op_type
+        self.other_params = {} if other_params is None else other_params
+
+    def add_params(self, params: list[Variable]) -> None:
+        self.params = params
+
+    def add_output(self, output: Variable) -> None:
+        self.output = output
+
+    def __eq__(self, value) -> bool:
+        return self.op_type == value if isinstance(value, OpType) else False
 
 
-def main():
-    """Driver function"""
-    data = collect_dataset()
+class GradientTracker:
+    """
+    Class contains methods to compute partial derivatives of Variable
+    based on the computation graph.
 
-    len_data = data.shape[0]
-    data_x = np.c_[np.ones(len_data), data[:, :-1]].astype(float)
-    data_y = data[:, -1].astype(float)
+    Examples:
 
-    theta = run_linear_regression(data_x, data_y)
-    len_result = theta.shape[1]
-    print("Resultant Feature vector : ")
-    for i in range(len_result):
-        print(f"{theta[0, i]:.5f}")
+    >>> with GradientTracker() as tracker:
+    ...     a = Variable([2.0, 5.0])
+    ...     b = Variable([1.0, 2.0])
+    ...     m = Variable([1.0, 2.0])
+    ...     c = a + b
+    ...     d = a * b
+    ...     e = c / d
+    >>> tracker.gradient(e, a)
+    array([-0.25, -0.04])
+    >>> tracker.gradient(e, b)
+    array([-1.  , -0.25])
+    >>> tracker.gradient(e, m) is None
+    True
+
+    >>> with GradientTracker() as tracker:
+    ...     a = Variable([[2.0, 5.0]])
+    ...     b = Variable([[1.0], [2.0]])
+    ...     c = a @ b
+    >>> tracker.gradient(c, a)
+    array([[1., 2.]])
+    >>> tracker.gradient(c, b)
+    array([[2.],
+           [5.]])
+
+    >>> with GradientTracker() as tracker:
+    ...     a = Variable([[2.0, 5.0]])
+    ...     b = a ** 3
+    >>> tracker.gradient(b, a)
+    array([[12., 75.]])
+    """
+
+    instance = None
+
+    def __new__(cls) -> Self:
+        """
+        Executes at the creation of class object and returns if
+        object is already created. This class follows singleton
+        design pattern.
+        """
+        if cls.instance is None:
+            cls.instance = super().__new__(cls)
+        return cls.instance
+
+    def __init__(self) -> None:
+        self.enabled = False
+
+    def __enter__(self) -> Self:
+        self.enabled = True
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.enabled = False
+
+    def append(
+        self,
+        op_type: OpType,
+        params: list[Variable],
+        output: Variable,
+        other_params: dict | None = None,
+    ) -> None:
+        """
+        Adds Operation object to the related Variable objects for
+        creating computational graph for calculating gradients.
+
+        Args:
+            op_type: Operation type
+            params: Input parameters to the operation
+            output: Output variable of the operation
+        """
+        operation = Operation(op_type, other_params=other_params)
+        param_nodes = []
+        for param in params:
+            param.add_param_to(operation)
+            param_nodes.append(param)
+        output.add_result_of(operation)
+
+        operation.add_params(param_nodes)
+        operation.add_output(output)
+
+    def gradient(self, target: Variable, source: Variable) -> np.ndarray | None:
+        """
+        Reverse accumulation of partial derivatives to calculate gradients
+        of target variable with respect to source variable.
+
+        Args:
+            target: target variable for which gradients are calculated.
+            source: source variable with respect to which the gradients are
+            calculated.
+
+        Returns:
+            Gradient of the source variable with respect to the target variable
+        """
+
+        # partial derivatives with respect to target
+        partial_deriv = defaultdict(lambda: 0)
+        partial_deriv[target] = np.ones_like(target.to_ndarray())
+
+        # iterating through each operations in the computation graph
+        operation_queue = [target.result_of]
+        while len(operation_queue) > 0:
+            operation = operation_queue.pop()
+            for param in operation.params:
+                # as per the chain rule, multiplying partial derivatives
+                # of variables with respect to the target
+                dparam_doutput = self.derivative(param, operation)
+                dparam_dtarget = dparam_doutput * partial_deriv[operation.output]
+                partial_deriv[param] += dparam_dtarget
+
+                if param.result_of and param.result_of != OpType.NOOP:
+                    operation_queue.append(param.result_of)
+
+        return partial_deriv.get(source)
+
+    def derivative(self, param: Variable, operation: Operation) -> np.ndarray:
+        """
+        Compute the derivative of given operation/function
+
+        Args:
+            param: variable to be differentiated
+            operation: function performed on the input variable
+
+        Returns:
+            Derivative of input variable with respect to the output of
+            the operation
+        """
+        params = operation.params
+
+        if operation == OpType.ADD:
+            return np.ones_like(params[0].to_ndarray(), dtype=np.float64)
+        if operation == OpType.SUB:
+            if params[0] == param:
+                return np.ones_like(params[0].to_ndarray(), dtype=np.float64)
+            return -np.ones_like(params[1].to_ndarray(), dtype=np.float64)
+        if operation == OpType.MUL:
+            return (
+                params[1].to_ndarray().T
+                if params[0] == param
+                else params[0].to_ndarray().T
+            )
+        if operation == OpType.DIV:
+            if params[0] == param:
+                return 1 / params[1].to_ndarray()
+            return -params[0].to_ndarray() / (params[1].to_ndarray() ** 2)
+        if operation == OpType.MATMUL:
+            return (
+                params[1].to_ndarray().T
+                if params[0] == param
+                else params[0].to_ndarray().T
+            )
+        if operation == OpType.POWER:
+            power = operation.other_params["power"]
+            return power * (params[0].to_ndarray() ** (power - 1))
+
+        err_msg = f"invalid operation type: {operation.op_type}"
+        raise ValueError(err_msg)
 
 
 if __name__ == "__main__":
     import doctest
 
     doctest.testmod()
-    main()
